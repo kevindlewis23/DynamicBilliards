@@ -405,8 +405,10 @@ while not done:
             pygame.display.flip()
             draw_index += 1
             last_draw = time.time()
-
-
         
-    
+# Quit, even if calcthread is still running
+pygame.quit()
+
+
+# TODO: kill the thread here (make it killable)
     
