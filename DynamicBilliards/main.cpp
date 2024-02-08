@@ -145,7 +145,7 @@ double percentToAngle(const Point& point, double percent, const Shape& shape, do
     double angles[2];
     // Get the minimum and maximum angles to tangents with the shape using binary search
     // Assuming the shape is convex
-    double tooLow = validAngle - M_PI / 2;
+    double tooLow = validAngle - M_PI;
     double tooHigh = validAngle;
     // Get the lowest angle with binary search
     for (int i = 0; i < NUM_ITER; ++i) {
@@ -159,7 +159,7 @@ double percentToAngle(const Point& point, double percent, const Shape& shape, do
     angles[0] = (tooLow + tooHigh) / 2;
 
     tooLow = validAngle;
-    tooHigh = validAngle + M_PI / 2;
+    tooHigh = validAngle + M_PI;
     // Get the highest angle with binary search
     for (int i = 0; i < NUM_ITER; ++i) {
         double midAngle = (tooLow + tooHigh) / 2;

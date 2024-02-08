@@ -96,24 +96,17 @@ def rectangle (ul, br):
 # and returns 0 if the point is on the shape, a negative value if it is in the shape, 
 # and a positive value if it is out of the shape.  I may try to generalize to parametric equations later.
 # This function must be somewhat smooth (at least near the boundary) as it will be used to find tangents.
-# distance = ellipse(Point(-1,0), Point(2,0), 3.5)
+distance = ellipse(Point(-1,0), Point(2,0), 3.1)
 # distance = circle(1)
-distance = rectangle(Point(-1, 0), Point(1, -.02))
+# distance = rectangle(Point(-1, 0), Point(1, -1))
 # distance = nEllipse([Point(-1, 1), Point(1, 1), Point(-1, -1), Point(1, -1)], 4.001 + math.sqrt(2) * 2)
 
-r = math.sqrt(3)
-x = 1.4*math.pi/4 + .1
+
 # Point to start at
-startPoint = Point(r * math.cos(x), r*math.sin(x))
+startPoint = Point(0,2)
 
 # Angle from -1 to 1, -1 is furthest right of cone from the point's POV, 1 is furthest left
-startAngle = 3 * math.pi/2
-
-# Get the angle to the middle of the segment from the origin
-startAngle = math.atan2(-startPoint.y, -startPoint.x)
-
-startPoint = Point(-2, 0.4)
-startAngle=.9
+startAngle = .95
 
 
 # If you want the start angle to actually be an angle in radians, set this to false
@@ -149,7 +142,7 @@ maxDist = .03
 draw_delay = 0.1
 
 # Number of outer points to calculate and draw on the first iteration (doubles every iteration)
-startN = 8
+startN = 50
 
 # -------------------------------------------------------------------------------
 
@@ -238,7 +231,7 @@ def getMinMaxAngles(point, distFunc, validAngle):
     # Get the minimum and max angles to tangents with the shape using binary search
     # Valid angle can be used a starting point because it will definitely point towards the shape
     # Assuming the shape is convex
-    tooLow = validAngle - math.pi/2
+    tooLow = validAngle - math.pi
     tooHigh = validAngle
     # Get the lowest angle with binary search
     for i in range(NUM_ITER):
@@ -251,7 +244,7 @@ def getMinMaxAngles(point, distFunc, validAngle):
     minAngle = (tooLow + tooHigh) / 2
 
     tooLow = validAngle
-    tooHigh = validAngle + math.pi/2
+    tooHigh = validAngle + math.pi
     # Get the highest angle with binary search
     for i in range(NUM_ITER):
         midAngle = (tooLow + tooHigh) / 2
@@ -352,7 +345,6 @@ def drawPoint (color, point):
 def drawLine (color, p1, p2):
     # Use line thickness later
     pygame.draw.aaline(screen, color, pixLoc(p1), pixLoc(p2))
-
 
 toDraw = True
 if toDraw:
