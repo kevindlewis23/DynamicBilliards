@@ -48,6 +48,10 @@ def circle (radius):
 def ellipse (a, b, r):
     return lambda point: a.dist(point) + b.dist(point) - r
 
+# n point ellipse
+def nEllipse(points, r):
+    return lambda point: sum([point.dist(p) for p in points]) - r
+
 # Helper function for rectangle as lambdas can only be one line
 # 0 if on the rectangle, positive if outside, negative if inside
 def rectDistance (point, ul, br):
@@ -92,23 +96,33 @@ def rectangle (ul, br):
 # and returns 0 if the point is on the shape, a negative value if it is in the shape, 
 # and a positive value if it is out of the shape.  I may try to generalize to parametric equations later.
 # This function must be somewhat smooth (at least near the boundary) as it will be used to find tangents.
-distance = ellipse(Point(-1,0), Point(2,0), 3.5)
+# distance = ellipse(Point(-1,0), Point(2,0), 3.5)
 # distance = circle(1)
-# distance = rectangle(Point(-1, 1), Point(1, -1))
+distance = rectangle(Point(-1, 0), Point(1, -.02))
+# distance = nEllipse([Point(-1, 1), Point(1, 1), Point(-1, -1), Point(1, -1)], 4.001 + math.sqrt(2) * 2)
 
+r = math.sqrt(3)
+x = 1.4*math.pi/4 + .1
 # Point to start at
-startPoint = Point(0,2)
+startPoint = Point(r * math.cos(x), r*math.sin(x))
 
 # Angle from -1 to 1, -1 is furthest right of cone from the point's POV, 1 is furthest left
-startAngle = .9
+startAngle = 3 * math.pi/2
+
+# Get the angle to the middle of the segment from the origin
+startAngle = math.atan2(-startPoint.y, -startPoint.x)
+
+startPoint = Point(-2, 0.4)
+startAngle=.9
+
 
 # If you want the start angle to actually be an angle in radians, set this to false
 startAngleIsPercent = True
 
-# Any angle that points toward the shape, just used for initial calculations, DON'T FORGET TO DO THIS! 
+# Any point in the shape (or at least where the ray from the start point to it intersects the shape), 
+# just used for initial calculations, DON'T FORGET TO DO THIS! 
 # Not used if using an actual angle in radians rather than a percent
-validAngle = 3*math.pi/2
-
+validPoint = Point(0,0)
 # ------------------------------------ SIMULATION ACCURACY CONSTANTS ------------
 dx = .00001 # Used as distance when calculating derivatives
 step = .01 # Small step size when raycasting towards the shape
@@ -133,6 +147,9 @@ maxDist = .03
 
 # Time between drawing points/lines
 draw_delay = 0.1
+
+# Number of outer points to calculate and draw on the first iteration (doubles every iteration)
+startN = 8
 
 # -------------------------------------------------------------------------------
 
@@ -285,15 +302,17 @@ def runIterations(point, startAngle, n, distFunc, points):
             curPercent = angleToPercent(curPoint, nextPoints[2], distFunc)
             curAngle = percentToAngle(curPoint, -curPercent, distFunc, nextPoints[2])
 
-def runFromPercent(point, percent, validAngle, n, distFunc, points):
+def runFromPercent(point, percent, validPoint, n, distFunc, points):
+    # Get a valid angle
+    validAngle = math.atan2(validPoint.y - point.y, validPoint.x - point.x)
     # Get the angle
     angle = percentToAngle(point, percent, distFunc, validAngle)
     # Run the iterations
     runIterations(point, angle, n, distFunc, points)
 
 # Drawing stuff
-pygame.init()
-
+# Define screen globally
+screen = 0
 
 centerx, centery = w/2, h/2
 maxBright = 255
@@ -321,10 +340,6 @@ def hslToRGB(h, s, l):
         r, g, b = c, 0, x
     return (int((r+m)*maxBright), int((g+m)*maxBright), int((b+m)*maxBright))
 
-screen = pygame.display.set_mode((w,h))
-done = False
-
-
 
 
 def pixLoc(point):
@@ -338,77 +353,83 @@ def drawLine (color, p1, p2):
     # Use line thickness later
     pygame.draw.aaline(screen, color, pixLoc(p1), pixLoc(p2))
 
-curN = 8
-last_draw = -1
-draw_index = 0
 
-isDrawing = False
+toDraw = True
+if toDraw:
+    pygame.init()
+    screen = pygame.display.set_mode((w,h))
+    done = False
 
-pointsArr = []
-nextPointsArr = []
+    curN = startN
+    last_draw = -1
+    draw_index = 0
 
-def createThread():
-    if startAngleIsPercent:
-        t = Thread(target=runFromPercent, args=(startPoint, startAngle, validAngle, curN, distance, nextPointsArr))
-        t.start()
-        return t
-    else:
-        t = Thread(target=runIterations, args=(startPoint, startAngle, curN, distance, nextPointsArr))
-        t.start()
-        return t
+    isDrawing = False
 
-calcthread = createThread()
-while not done:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            done = True
+    pointsArr = []
+    nextPointsArr = []
 
-    if not isDrawing:
-        # Check if the calculation thread is done
-        if not calcthread.is_alive():
-            # Get the result from the thread
-            calcthread.join()
-            pointsArr = nextPointsArr
-            nextPointsArr=[]
-            isDrawing = True
-            last_draw = -1
-            draw_index = 0
+    def createThread():
+        if startAngleIsPercent:
+            t = Thread(target=runFromPercent, args=(startPoint, startAngle, validPoint, curN, distance, nextPointsArr))
+            t.start()
+            return t
+        else:
+            t = Thread(target=runIterations, args=(startPoint, startAngle, curN, distance, nextPointsArr))
+            t.start()
+            return t
 
-                # Clear the screen
-            screen.fill((0,0,0))
-            # Draw the sampleEllipse by coloring each pixel based on how close the sampleEllipse function there is to 0
-            for x in range(w):
-                for y in range(h):
-                    dist = distance(Point((x - centerx) / scalingFactor, (centery - y) / scalingFactor))
-                    if math.fabs(dist) < maxDist:
-                        brightness = 1 - (math.fabs(dist) / maxDist)
-                        screen.set_at((x,y), lightToRGB(brightness))
-                    else:
-                        screen.set_at((x,y), (0,0,0))
-            pygame.display.flip()
+    calcthread = createThread()
+    while not done:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                done = True
 
-            # Restart the calculation with double the n
-            curN *= 2
-            calcthread = createThread()
-    else:
-        # Check if we're done drawing
-        if draw_index >= len(pointsArr):
-            isDrawing = False
-            continue
+        if not isDrawing:
+            # Check if the calculation thread is done
+            if not calcthread.is_alive():
+                # Get the result from the thread
+                calcthread.join()
+                pointsArr = nextPointsArr
+                nextPointsArr=[]
+                isDrawing = True
+                last_draw = -1
+                draw_index = 0
 
-        # Check if it's time to draw
-        if time.time() - last_draw >= draw_delay:
-            color = hslToRGB(300 * draw_index / len(pointsArr),1,0.5)
-            drawPoint(color, pointsArr[draw_index])
-            if draw_index > 0:
-                drawLine(color, pointsArr[draw_index-1], pointsArr[draw_index])
-            pygame.display.flip()
-            draw_index += 1
-            last_draw = time.time()
-        
-# Quit, even if calcthread is still running
-pygame.quit()
+                    # Clear the screen
+                screen.fill((0,0,0))
+                # Draw the sampleEllipse by coloring each pixel based on how close the sampleEllipse function there is to 0
+                for x in range(w):
+                    for y in range(h):
+                        dist = distance(Point((x - centerx) / scalingFactor, (centery - y) / scalingFactor))
+                        if math.fabs(dist) < maxDist:
+                            brightness = 1 - (math.fabs(dist) / maxDist)
+                            screen.set_at((x,y), lightToRGB(brightness))
+                        else:
+                            screen.set_at((x,y), (0,0,0))
+                pygame.display.flip()
+
+                # Restart the calculation with double the n
+                curN *= 2
+                calcthread = createThread()
+        else:
+            # Check if we're done drawing
+            if draw_index >= len(pointsArr):
+                isDrawing = False
+                continue
+
+            # Check if it's time to draw
+            if time.time() - last_draw >= draw_delay:
+                color = hslToRGB(300 * draw_index / len(pointsArr),1,0.5)
+                drawPoint(color, pointsArr[draw_index])
+                if draw_index > 0:
+                    drawLine(color, pointsArr[draw_index-1], pointsArr[draw_index])
+                pygame.display.flip()
+                draw_index += 1
+                last_draw = time.time()
+            
+    # Quit, even if calcthread is still running
+    pygame.quit()
 
 
-# TODO: kill the thread here (make it killable)
-    
+    # TODO: kill the thread here (make it killable)
