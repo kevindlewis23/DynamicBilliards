@@ -496,11 +496,11 @@ int main() {
                 if (i > 0)
                     drawLine(window, points[i - 1], points[i], scalingFactor, color);
             }
-        }
-        else continue;
 
-        // Display the window
-        window.display();
+            // Window only displays if more points are drawn
+            window.display();
+        }
+        
         // Sleep for draw_delay
         std::this_thread::sleep_for(std::chrono::milliseconds((int)(draw_delay * 1000)));
     }
