@@ -10,11 +10,25 @@
 
 // Simulation accuracy constants
 const double dx = 0.00001; // Used as distance when calculating derivatives
-const double step = 0.01; // Small step size when raycasting towards the shape
-const double large_step = 0.5; // large step size when raycasting towards the shape
-const double large_step_dist = 1; // Minimum value of the "distance" function to take large steps 
-const int NUM_ITER = 50; // Number of iterations when running binary search to approximate tangents
-const int MAX_ITER = 1000; // Maximum number of steps when raycasting.
+const double step = 0.001; // Small step size when raycasting towards the shape
+const double large_step = 0.3; // large step size when raycasting towards the shape
+const double large_step_dist = .6; // Minimum value of the "distance" function to take large steps 
+const int NUM_ITER = 100; // Number of iterations when running binary search to approximate tangents
+const int MAX_ITER = 5000; // Maximum number of steps when raycasting.
+
+// Drawing constants
+const int pointRadius = 5;
+double scalingFactor = 200; // How big to scale from plane to screen
+double maxDist = 0.03; // Max distance to the main shape to draw
+
+// Window size
+int w = 2000;
+int h = 1500;
+
+// Minimum Time between drawing points / lines in seconds
+double draw_delay = 0.01;
+
+// STARTING CONDITIONS ARE IN THE MAIN FUNCTION
 
 
 // Stub all the future functions and classes
@@ -28,6 +42,7 @@ double normalizeAngle(double angle);
 double percentToAngle(const Point& point, double percent, const Shape& shape, double validAngle);
 double angleToPercent(const Point& point, double angle, const Shape& shape);
 Point getCollisionPoint(const Point& p1, const Point& p2, const Shape& shape);
+double* getMinMaxAngles(Point point, const Shape& shape, double validAngle);
 bool rayIntersects(const Point& point, double angle, const Shape& shape);
 void drawPoint(sf::RenderWindow& window, const Point& point, double scalingFactor, sf::Color color);
 void drawLine(sf::RenderWindow& window, const Point& p1, const Point& p2, double scalingFactor, sf::Color color);
@@ -35,6 +50,8 @@ void collideWithShape(const Point& point, double angle, const Shape& shape, Poin
 void runIterations(const Point& startPoint, double startAngle, int n, const Shape& shape, std::vector<Point>& points);
 void runFromPercent(const Point& startPoint, double percent, const Point& validPoint, int n, const Shape& shape, std::vector<Point>& points);
 
+
+bool killThread = false;
 
 class Point {
 public:
@@ -141,7 +158,7 @@ double normalizeAngle(double angle) {
     return fmod(angle + M_PI, 2 * M_PI) - M_PI;
 }
 
-double percentToAngle(const Point& point, double percent, const Shape& shape, double validAngle) {
+double* getMinMaxAngles(Point point, const Shape& shape, double validAngle) {
     double angles[2];
     // Get the minimum and maximum angles to tangents with the shape using binary search
     // Assuming the shape is convex
@@ -171,14 +188,16 @@ double percentToAngle(const Point& point, double percent, const Shape& shape, do
     }
     angles[1] = (tooLow + tooHigh) / 2;
 
+    return angles;
+}
+
+double percentToAngle(const Point& point, double percent, const Shape& shape, double validAngle) {
+    double* angles = getMinMaxAngles(point, shape, validAngle);
     return angles[0] + (angles[1] - angles[0]) * (percent + 1) / 2;
 }
 
 double angleToPercent(const Point& point, double angle, const Shape& shape) {
-    double angles[2];
-    double validAngle = atan2(shape.distance(Point(0, 0)), -shape.distance(Point(1, 1)));
-    angles[0] = percentToAngle(point, -1, shape, validAngle);
-    angles[1] = percentToAngle(point, 1, shape, validAngle);
+    double* angles = getMinMaxAngles(point, shape, angle);
     return 2 * (angle - angles[0]) / (angles[1] - angles[0]) - 1;
 }
 
@@ -188,7 +207,7 @@ bool rayIntersects(const Point& point, double angle, const Shape& shape) {
     double lastVal = INFINITY;
     for (int i = 0; i < MAX_ITER; ++i) {
         double dist = shape.distance(curPoint);
-        if (dist < 0)
+        if (dist <= 0)
             return true;
         if (dist > lastVal)
             return false;
@@ -263,6 +282,8 @@ void collideWithShape(const Point& point, double angle, const Shape& shape, Poin
     outNewAngle = 2 * tangentAngle - angle;
     double dist = std::sqrt(std::pow(point.x - outMidpoint.x, 2) + std::pow(point.y - outMidpoint.y, 2));
     outFinalPoint = outMidpoint + Point(std::cos(outNewAngle), std::sin(outNewAngle)) * dist;
+    // Flip new angle to use as valid angle on next iteration
+    outNewAngle += M_PI;
 }
 
 void runIterations(const Point& startPoint, double startAngle, int n, const Shape& shape, std::vector<Point>& points) {
@@ -271,6 +292,7 @@ void runIterations(const Point& startPoint, double startAngle, int n, const Shap
     Point curPoint = startPoint;
     double curAngle = startAngle;
     for (int i = 0; i < n; ++i) {
+        if (killThread) return;
         Point nextMidpoint, nextFinalPoint;
         double nextAngle;
         collideWithShape(curPoint, curAngle, shape, nextMidpoint, nextFinalPoint, nextAngle);
@@ -292,14 +314,15 @@ void runFromPercent(const Point& startPoint, double percent, const Point& validP
 
 
 void drawPoint(sf::RenderWindow& window, const Point& point, double scalingFactor, sf::Color color) {
-    sf::CircleShape sfmlShape(5);
+    sf::CircleShape sfmlShape(pointRadius);
     sfmlShape.setFillColor(color);
     sfmlShape.setPosition(point.x * scalingFactor + window.getSize().x * 0.5, -point.y * scalingFactor + 0.5 * window.getSize().y);
+    // Center the circle
+    sfmlShape.move(-pointRadius, -pointRadius);
     window.draw(sfmlShape);
 }
 
 void drawLine(sf::RenderWindow& window, const Point& p1, const Point& p2, double scalingFactor, sf::Color color) {
-
     sf::Vertex line[] = {
         sf::Vertex(sf::Vector2f(p1.x * scalingFactor + window.getSize().x * 0.5, -p1.y * scalingFactor + 0.5 * window.getSize().y)),
         sf::Vertex(sf::Vector2f(p2.x * scalingFactor + window.getSize().x * 0.5, -p2.y * scalingFactor + 0.5 * window.getSize().y))
@@ -355,7 +378,7 @@ void HSLtoRGB(double h, double s, double l, double& r, double& g, double& b) {
 int main() {
 
     // Example usage
-    Circle shape(1);
+    //  Circle shape(1);
     // Create a rectangle
     // Rectangle shape(Point(-1, 0), Point(1, -0.02));
     // Create an ellipse
@@ -366,23 +389,25 @@ int main() {
     Point startPoint(r * cos(theta), r * sin(theta));
     double startAngle = atan2(-startPoint.y, -startPoint.x);
     */
-    Point startPoint(-1, 2);
-    double startAngle = .95;
+
+    // Very cool shape
+    NEllipse shape({ Point(-1, 1), Point(1, 1), Point(-1, -1), Point(1, -1) }, 4.001 + sqrt(2) * 2);
+    Point startPoint(-2, 2);
+    double startAngle = .9;
+
+
+    /*Rectangle shape(Point(-1, 0), Point(1, -1));
+    double t = 1;
+    
+    Point startPoint = Point::unit(t);
+    double startAngle = 3*M_PI/2;*/
     bool startAngleIsPercent = true; // If true, startAngle is a number where -1 is furthest left, 1 is furthest right
                                       //, else it's an angle
     // If startAngleIsPercent, you need a valid point to calculate the angle from
     // This point should either be in/on the shape or at least the ray from the startPoint to it should intersect the shape
     Point validPoint = Point(0, 0);
 
-    double scalingFactor = 300; // How big to scale from plane to screen
-    double maxDist = 0.03; // Max distance to the main shape to draw
-
-    // Window size
-    int w = 2000;
-    int h = 1500;
-
-    // Minimum Time between drawing points / lines in seconds
-    double draw_delay = 0.1;
+    
 
 
     // Create the calculation thread
@@ -390,9 +415,9 @@ int main() {
     std::thread calculationThread;
     calculationThread = std::thread([&] {
 		if (startAngleIsPercent)
-			runFromPercent(startPoint, startAngle, validPoint, 100, shape, points);
+			runFromPercent(startPoint, startAngle, validPoint, 100000, shape, points);
 		else
-			runIterations(startPoint, startAngle, 100, shape, points);
+			runIterations(startPoint, startAngle, 100000, shape, points);
 	});
     
 
@@ -402,13 +427,19 @@ int main() {
 
     sf::RenderWindow window(sf::VideoMode(w, h), "SFML Drawing");
     int numDrawn = 1;
+
+    // Pixel array for the shape
+    sf::Texture texture;
+    texture.create(w, h);
+    bool recalculatePixels = true;
     // Main loop
     while (window.isOpen()) {
         // Event handling
         sf::Event event;
-        while (window.pollEvent(event)) {
+        if(window.pollEvent(event)) {
             if (event.type == sf::Event::Closed) {
                 // Kill the calculation thread
+                killThread = true;
                 calculationThread.join();
                 window.close();
             }
@@ -416,25 +447,42 @@ int main() {
             if (event.type == sf::Event::Resized) {
                 w = event.size.width;
                 h = event.size.height;
+                recalculatePixels = true;
             }
         }
-    
-   
-        // Clear the window
+
         window.clear(sf::Color::Black);
 
+
         // Draw the sample shape by coloring each pixel based on how close the distance function is to 0
-        for (int x = 0; x < w; ++x) {
-            for (int y = 0; y < h; ++y) {
-                double dist = shape.distance(Point((x - w / 2) / scalingFactor, (h / 2 - y) / scalingFactor));
-                if (std::fabs(dist) < maxDist) {
-                    double brightness = 1 - (std::fabs(dist) / maxDist);
-                    sf::Color color(brightness * 255, brightness * 255, brightness * 255);
-                    sf::Vertex vertex(sf::Vector2f(x, y), color);
-                    window.draw(&vertex, 1, sf::Points);
+        if (recalculatePixels) {
+            recalculatePixels = false;
+            static sf::Uint8* pixels = new sf::Uint8[w * h * 4];
+            for (int x = 0; x < w; ++x) {
+                for (int y = 0; y < h; ++y) {
+                    double dist = shape.distance(Point((x - w / 2) / scalingFactor, (h / 2 - y) / scalingFactor));
+                    if (std::fabs(dist) < maxDist) {
+                        double brightness = 1 - (std::fabs(dist) / maxDist);
+                        pixels[(x + y * w) * 4] = brightness * 255;
+                        pixels[(x + y * w) * 4 + 1] = brightness * 255;
+                        pixels[(x + y * w) * 4 + 2] = brightness * 255;
+                        pixels[(x + y * w) * 4 + 3] = 255;
+                    }
+                    else {
+                        pixels[(x + y * w) * 4] = 0;
+                        pixels[(x + y * w) * 4 + 1] = 0;
+                        pixels[(x + y * w) * 4 + 2] = 0;
+                        pixels[(x + y * w) * 4 + 3] = 255;
+                    }
                 }
             }
+            texture.update(pixels);
         }
+        
+        
+        sf::Sprite sprite(texture);
+        window.draw(sprite);
+
 
         // Check if points has more points than numDrawn
         if (points.size() > numDrawn + 1) {
@@ -449,6 +497,7 @@ int main() {
                     drawLine(window, points[i - 1], points[i], scalingFactor, color);
             }
         }
+        else continue;
 
         // Display the window
         window.display();

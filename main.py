@@ -280,6 +280,8 @@ def collideWithShape (point, angle, distFunc):
     finalPoint = midpoint + Point.unit(newAngle) * dist
     return (midpoint, finalPoint, normalizeAngle(newAngle + math.pi))
 
+
+killThread=False
 def runIterations(point, startAngle, n, distFunc, points):
     # Clear points list
     points.clear()
@@ -287,6 +289,8 @@ def runIterations(point, startAngle, n, distFunc, points):
     curPoint = point
     curAngle = startAngle
     for i in range(n):
+        if killThread:
+            return
         nextPoints = collideWithShape(curPoint, curAngle, distFunc)
         points.append(nextPoints[0])
         points.append(nextPoints[1])
@@ -422,6 +426,5 @@ if toDraw:
             
     # Quit, even if calcthread is still running
     pygame.quit()
-
-
-    # TODO: kill the thread here (make it killable)
+    killThread = True
+    calcthread.join()
