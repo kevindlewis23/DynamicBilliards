@@ -31,7 +31,7 @@ int h = 1500;
 
 // Minimum Time between drawing points / lines in seconds
 // Set to 0 for delay solely due to calculation
-double draw_delay = 0.1;
+double draw_delay = 0.05;
 
 // STARTING CONDITIONS ARE IN THE MAIN FUNCTION
 
@@ -49,7 +49,6 @@ double getAngleToPoint(Point point, const Shape& shape, double t);
 bool angleToPointIncreasing(Point point, const Shape& shape, double t);
 double* getTangentPoints(Point point, const Shape& shape);
 double getBisectorAngle(Point point, const Shape& shape);
-double distanceFromLine(const Point& rayOrigin, double angle, const Point& point);
 double getCollisionPoint(const Point& point, double angle, const Shape& shape);
 void collideWithShape(const Point& point, double angle, const Shape& shape, Point& outMidpoint, Point& outFinalPoint, double& outNewAngle);
 void drawPoint(sf::RenderWindow& window, const Point& point, double scalingFactor, sf::Color color);
@@ -321,45 +320,9 @@ double getBisectorAngle(Point point, const Shape& shape) {
 }
 
 
-
-double distanceFromLine(const Point& rayOrigin, double angle, const Point& point) {
-    // Make sure the angle is not along axes for math to work
-    double ang = normalizeAngle(angle);
-    if (ang == 0 || ang == M_PI / 2 || ang == M_PI || ang == 3 * M_PI / 2)
-        ang += dx;
-    // Get the distance from the line defined by rayOrigin and angle to point
-    double slope = tan(ang);
-	double intercept = rayOrigin.y - slope * rayOrigin.x;
-	double perpSlope = -1 / slope;
-	double perpIntercept = point.y - perpSlope * point.x;
-	double x = (intercept - perpIntercept) / (perpSlope - slope);
-	double y = slope * x + intercept;
-	return point.L1Dist(Point(x, y));
-}
-
-
-double distanceFromLineDeriv(const Point& rayOrigin, double angle, const Shape& shape, const double t) {
-    double t2 = shape.addT(t,dx);
-    double t1 = shape.addT(t,-dx);
-    double d1 = distanceFromLine(rayOrigin, angle, shape.equation(t1));
-    double d2 = distanceFromLine(rayOrigin, angle, shape.equation(t2));
-    return (d2 - d1) / (2*dx);
-}
-
 bool angleTooHigh(const Point& rayOrigin, double angle, const Shape& shape, double t) {
 	double angToPoint = getAngleToPoint(rayOrigin, shape, t);
 	return normalizeAngle(angToPoint - angle) > 0;
-}
-
-
-double newtonsMethodCollisionPoint(const Point& point, double angle, const Shape& shape, const double startingT) {
-    double t = startingT;
-    for (int i = 0; i < NUM_ITER; ++i) {
-        double dist = distanceFromLine(point, angle, shape.equation(t));
-        double deriv = distanceFromLineDeriv(point, angle, shape, t);
-        t = shape.addT(t, -grad_descent_rate * dist / deriv);
-    }
-    return t;
 }
 
 // Takes a point, shape, and angle
@@ -601,8 +564,8 @@ int main() {
 
 
         // Check if points has more points than numDrawn
-        if (points.size() > numDrawn + 1) {
-            numDrawn += 2;
+        if (points.size() > numDrawn) {
+            numDrawn ++;
             // Draw the points and lines
             for (int i = 0; i < numDrawn; ++i) {
                 double r = 0, g = 0, b = 0;
