@@ -31,7 +31,7 @@ int h = 1500;
 
 // Minimum Time between drawing points / lines in seconds
 // Set to 0 for delay solely due to calculation
-double draw_delay = 0.05;
+double draw_delay = 0.0;
 
 // STARTING CONDITIONS ARE IN THE MAIN FUNCTION
 
@@ -164,9 +164,9 @@ class Rectangle : public Shape {
     Point ul; // upper-left point
     Point br; // bottom-right point
 public:
-    Rectangle(const Point& ul, const Point& br) : ul(ul), br(br) {}
-    double maxT = 4;
-    double minT = 0;
+    Rectangle(const Point& ul, const Point& br) : ul(ul), br(br) {
+        maxT = 4;
+    }
     Point equation(const double t) const override {
         if (t < 1)
 			return Point(ul.x, ul.y + (br.y - ul.y) * t);
@@ -204,8 +204,6 @@ class ArbitraryShape : public Shape {
     double nonLoopingMinT;
     double nonLoopingPeriod;
 public:
-    double maxT;
-    double minT;
     // Takes a function that returns a point for a given t
     ArbitraryShape(input_function f, bool loop, double minArg, double maxArg) {
         eq = f;
@@ -504,7 +502,7 @@ int main() {
     //Point startPoint = Point(-sqrt(2)/2, sqrt(2)/2);
     //// Angle from start point to the origin
     //double startAngle = atan2(-startPoint.y, -startPoint.x);
-
+    
 
     // Create the calculation thread
     std::vector<Point> points;
