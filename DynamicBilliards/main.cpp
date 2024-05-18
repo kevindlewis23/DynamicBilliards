@@ -6,27 +6,32 @@
 #include <vector>
 #include <SFML/Graphics.hpp>
 #include <thread>
+#include <limits>
 
 
 // Simulation accuracy constants
-const double dx = 0.00001; // Used as distance when calculating derivatives
-const double step = 0.001; // Small step size when raycasting towards the shape
+const double dx = 0.000001; // Used as distance when calculating derivatives
+const double step = 0.0003; // Small step size when raycasting towards the shape
 const double large_step = 0.3; // large step size when raycasting towards the shape
-const double large_step_dist = .6; // Minimum value of the "distance" function to take large steps 
-const int NUM_ITER = 100; // Number of iterations when running binary search to approximate tangents
-const int MAX_ITER = 5000; // Maximum number of steps when raycasting.
+const double grad_descent_rate = .1; // Rate of gradient descent when approximating collisions
+const double large_step_dist = .4; // Minimum distance from the shape to take large steps 
+const int NUM_ITER = 1000; // Number of iterations when running binary search / Newton's method to approximate tangents
+const int POLLING_POINTS = 10; // Number of points to start from when doing Newton's method
+const double EPSILON = .001; // Something near 0
 
 // Drawing constants
 const int pointRadius = 5;
 double scalingFactor = 200; // How big to scale from plane to screen
 double maxDist = 0.03; // Max distance to the main shape to draw
+int numPointsOfShape = 1000; // Number of points on the shape to draw
 
 // Window size
 int w = 2000;
 int h = 1500;
 
 // Minimum Time between drawing points / lines in seconds
-double draw_delay = 0.01;
+// Set to 0 for delay solely due to calculation
+double draw_delay = 0.1;
 
 // STARTING CONDITIONS ARE IN THE MAIN FUNCTION
 
@@ -37,18 +42,20 @@ class Shape;
 class Circle;
 class Rectangle;
 class Ellipse;
-class NEllipse;
+class Segment;
+class ArbitraryShape;
 double normalizeAngle(double angle);
-double percentToAngle(const Point& point, double percent, const Shape& shape, double validAngle);
-double angleToPercent(const Point& point, double angle, const Shape& shape);
-Point getCollisionPoint(const Point& p1, const Point& p2, const Shape& shape);
-double* getMinMaxAngles(Point point, const Shape& shape, double validAngle);
-bool rayIntersects(const Point& point, double angle, const Shape& shape);
+double getAngleToPoint(Point point, const Shape& shape, double t);
+bool angleToPointIncreasing(Point point, const Shape& shape, double t);
+double* getTangentPoints(Point point, const Shape& shape);
+double getBisectorAngle(Point point, const Shape& shape);
+double distanceFromLine(const Point& rayOrigin, double angle, const Point& point);
+double getCollisionPoint(const Point& point, double angle, const Shape& shape);
+void collideWithShape(const Point& point, double angle, const Shape& shape, Point& outMidpoint, Point& outFinalPoint, double& outNewAngle);
 void drawPoint(sf::RenderWindow& window, const Point& point, double scalingFactor, sf::Color color);
 void drawLine(sf::RenderWindow& window, const Point& p1, const Point& p2, double scalingFactor, sf::Color color);
 void collideWithShape(const Point& point, double angle, const Shape& shape, Point& outMidpoint, Point& outFinalPoint, double& outNewAngle);
 void runIterations(const Point& startPoint, double startAngle, int n, const Shape& shape, std::vector<Point>& points);
-void runFromPercent(const Point& startPoint, double percent, const Point& validPoint, int n, const Shape& shape, std::vector<Point>& points);
 
 
 bool killThread = false;
@@ -58,7 +65,7 @@ public:
     double x;
     double y;
 
-    Point () : x(0), y(0) {}
+    Point() : x(0), y(0) {}
 
     Point(double x, double y) : x(x), y(y) {}
 
@@ -74,6 +81,10 @@ public:
         return pow(x - other.x, 2) + pow(y - other.y, 2);
     }
 
+    double L1Dist(const Point& other) const {
+		return std::fabs(x - other.x) + std::fabs(y - other.y);
+	}
+
     // Overload multiplication with a scalar (double)
     Point operator*(double scalar) const {
         return Point(x * scalar, y * scalar);
@@ -84,14 +95,60 @@ public:
     }
 
     Point operator-(Point other) const {
-		return Point(x - other.x, y - other.y);
+        return Point(x - other.x, y - other.y);
+    }
+
+    Point operator/(double scalar) const {
+		return Point(x / scalar, y / scalar);
 	}
 
 };
 
+// Shapes are defined by parametric equations that return points for t values
+// All shapes must be loops, meaning the shape at maxT is the same as the shape at minT
+// If your shape is not a loop, compose it with (1 - cosx)/2 or something like it to make it a loop
+// THIS IS IMPORTANT, NON-LOOPING SHAPES MAY LEAD TO INFINITE LOOPS!!!!!!!
 class Shape {
 public:
-    virtual double distance(const Point& point) const = 0;
+    double maxT = 2 * M_PI;
+    double minT = 0;
+    // Parametric equation for the shape that takes values from minT to maxT and returns the point
+    // Equations should be differentiable
+    virtual Point equation(const double) const { return Point(0, 0); }
+
+    // Derivative stuff
+    // Get the tangent vector at a point, can replace with a close-form derivative
+    virtual Point tangent(const double t) const {
+        if (t > minT + dx && t < maxT - dx)
+			return (equation(t + dx) - equation(t - dx)) / (2 * dx);
+        if (t < minT + dx)
+            return (equation(t + dx) - equation(t)) / dx;
+        return (equation(t) - equation(t - dx)) / dx;
+	}
+
+    // Get the normal vector at a point 
+    Point normal(const double t) const {
+		Point tan = tangent(t);
+		return Point(tan.y, -tan.x);
+	}
+
+    double normalizeT(double t) const {
+		return fmod(t - minT, maxT - minT) + minT;
+	}
+
+    // Add t and dt, accounting for looping shapes
+    double addT(double t, double deltaT) const {
+		return fmod(t + deltaT - minT, maxT - minT) + minT;
+    }
+
+    // Find the middle of two t values, accounting for looping shapes
+    // Any two t values will have two middles on either side of the shape
+    // This will get the one where increasing t takes you from t1 to the middle to t2
+    double middleT(double t1, double t2) const {
+        while (t2 < t1) t2 += maxT - minT;
+        while (t2 > t1 + maxT - minT) t2 -= maxT - minT;
+        return normalizeT((t1 + t2) / 2);
+	}
 };
 
 class Circle : public Shape {
@@ -99,8 +156,8 @@ class Circle : public Shape {
 public:
     Circle(double radius) : radius(radius) {}
 
-    double distance(const Point& point) const override {
-        return pow(point.x, 2) + pow(point.y, 2) - pow(radius, 2);
+    Point equation(const double t) const override {
+        return Point(radius * cos(t), radius * sin(t));
     }
 };
 
@@ -109,181 +166,268 @@ class Rectangle : public Shape {
     Point br; // bottom-right point
 public:
     Rectangle(const Point& ul, const Point& br) : ul(ul), br(br) {}
+    double maxT = 4;
+    double minT = 0;
+    Point equation(const double t) const override {
+        if (t < 1)
+			return Point(ul.x, ul.y + (br.y - ul.y) * t);
+        if (t < 2)
+            return Point(ul.x + (br.x - ul.x) * (t - 1), br.y);
+        if (t < 3)
+            return Point(br.x, br.y - (br.y - ul.y) * (t - 2));
+        return Point(br.x - (br.x - ul.x) * (t - 3), ul.y);
 
-    double distance(const Point& point) const override {
-        double t = ul.y, b = br.y, l = ul.x, r = br.x;
-        if (point.x < l && point.y > t)
-            return l - point.x + point.y - t;
-        if (point.x > r && point.y > t)
-            return point.x - r + point.y - t;
-        if (point.x < l && point.y < b)
-            return l - point.x + b - point.y;
-        if (point.x > r && point.y < b)
-            return point.x - r + b - point.y;
-        if (point.x < l || point.x > r)
-            return std::min(fabs(point.x - l), fabs(point.x - r));
-        if (point.y < b || point.y > t)
-            return std::min(fabs(point.y - t), fabs(point.y - b));
-        return -std::min(fabs(point.x - l), std::min(fabs(point.x - r), std::min(fabs(point.y - t), fabs(point.y - b))));
-    }
+	}
 };
 
 class Ellipse : public Shape {
-    Point a; // focus
-    Point b; // focus
-    double r; // radius
+    double a; // semi-major axis
+    double b; // semi-minor axis
 public:
-    Ellipse(const Point& a, const Point& b, double r) : a(a), b(b), r(r) {}
+    Ellipse(double a, double b) : a(a), b(b) {}
 
-    double distance(const Point& point) const override {
-        return a.dist(point) + b.dist(point) - r;
-    }
+    Point equation(const double t) const override {
+		return Point(a * cos(t), b * sin(t));
+	}
 };
 
-class NEllipse : public Shape {
-    std::vector<Point> points;
-    double r; // radius
+class Segment : public Ellipse {
 public:
-    NEllipse(const std::vector<Point>& points, double r) : points(points), r(r) {}
+    Segment(const double width) : Ellipse(width, 0) {}
+};
 
-    double distance(const Point& point) const override {
-        double sumDist = 0.0;
-        for (const auto& p : points)
-            sumDist += point.dist(p);
-        return sumDist - r;
+
+// Class for any general shape defined by a parametric equation
+typedef Point (*input_function)(double);
+class ArbitraryShape : public Shape {
+    input_function eq;
+    bool isLoop;
+    double nonLoopingMinT;
+    double nonLoopingPeriod;
+public:
+    double maxT;
+    double minT;
+    // Takes a function that returns a point for a given t
+    ArbitraryShape(input_function f, bool loop, double minArg, double maxArg) {
+        eq = f;
+        nonLoopingMinT = minArg;
+        nonLoopingPeriod = maxArg - minArg;
+        isLoop = loop;
+        if (isLoop) {
+            minT = minArg;
+            maxT = maxArg;
+        }
+        else {
+            minT = 0;
+			maxT = 2 * M_PI;
+        }
     }
+
+    Point equation(const double t) const override {
+        if (!isLoop) {
+            // Loop from 0 to 1 back to 0
+            double actualT = (1-cos(t)) / 2;
+            // Fit to given min and max t values
+            actualT *= nonLoopingPeriod;
+            actualT += nonLoopingMinT;
+            return eq(actualT);
+        }
+		return eq(t);
+	}
 };
 
 double normalizeAngle(double angle) {
     return fmod(angle + M_PI, 2 * M_PI) - M_PI;
 }
 
-double* getMinMaxAngles(Point point, const Shape& shape, double validAngle) {
-    double angles[2];
-    // Get the minimum and maximum angles to tangents with the shape using binary search
-    // Assuming the shape is convex
-    double tooLow = validAngle - M_PI;
-    double tooHigh = validAngle;
-    // Get the lowest angle with binary search
+double getAngleToPoint(Point point, const Shape& shape, double t) {
+    Point point2 = shape.equation(t);
+    // Angle of the vector from point to point2
+    return atan2(point2.y - point.y, point2.x - point.x);
+}
+
+bool angleToPointIncreasing(Point point, const Shape& shape, double t) {
+	double angle1 = getAngleToPoint(point, shape, shape.addT(t, -dx));
+    double angle2 = getAngleToPoint(point, shape, shape.addT(t, dx));
+    
+    // Make sure these angles are close to each other
+    if (angle2 - angle1 > M_PI)
+		angle1 += 2 * M_PI;
+    if (angle1 - angle2 > M_PI)
+        angle2 += 2 * M_PI;
+    return angle2 > angle1;
+}
+
+
+// Get the t value of the tangent points on the shape
+// If the point is not on the outside of the shape, this could produce an infinite loop.
+double* getTangentPoints(Point point, const Shape& shape) {
+    // Get the min and max angles from the point to the shape
+
+    // Assuming convexity, we have one region where angleToPoint is strictly increasing with respect to t,
+    // and one region where it is strictly decreasing. We can binary search to find the boundary between these regions.
+
+    // First, find a t value where the derivative is positive, and one where it's negative
+    double incT = shape.minT;
+    while (!angleToPointIncreasing(point, shape, incT)) {
+        // Add a random amount to t between 0 and maxT-minT
+        incT = shape.addT(incT, (double)rand() * (shape.maxT - shape.minT) / (double)RAND_MAX);
+    }
+    double decT = shape.minT;
+    while (angleToPointIncreasing(point, shape, decT)) {
+        decT = shape.addT(decT, (double)rand() * (shape.maxT - shape.minT) / (double)RAND_MAX);
+    }
+
+    // Use binary search to find the two boundaries
+    double increasingT = incT;
+    double decreasingT = decT;
     for (int i = 0; i < NUM_ITER; ++i) {
-        double midAngle = (tooLow + tooHigh) / 2;
-        // Check if the line from the point to the midangle intersects with the shape
-        if (rayIntersects(point, midAngle, shape))
-            tooHigh = midAngle;
+        // Note argument order matters for middleT
+        double mid = shape.middleT(increasingT, decreasingT);
+        if (angleToPointIncreasing(point, shape, mid))
+            increasingT = mid;
         else
-            tooLow = midAngle;
+            decreasingT = mid;
     }
-    angles[0] = (tooLow + tooHigh) / 2;
 
-    tooLow = validAngle;
-    tooHigh = validAngle + M_PI;
-    // Get the highest angle with binary search
+    double boundary1 = (increasingT + decreasingT) / 2;
+
+    increasingT = incT;
+    decreasingT = decT;
     for (int i = 0; i < NUM_ITER; ++i) {
-        double midAngle = (tooLow + tooHigh) / 2;
-        // Check if the line from the point to the midangle intersects with the shape
-        if (rayIntersects(point, midAngle, shape))
-            tooLow = midAngle;
+        double mid = shape.middleT(decreasingT, increasingT);
+        if (angleToPointIncreasing(point, shape, mid))
+            increasingT = mid;
         else
-            tooHigh = midAngle;
+            decreasingT = mid;
     }
-    angles[1] = (tooLow + tooHigh) / 2;
 
-    return angles;
+    double boundary2 = (increasingT + decreasingT) / 2;
+
+    // Return these two boundaries
+    double* ret = new double[2];
+    ret[0] = boundary1;
+    ret[1] = boundary2;
+    return ret;
 }
 
-double percentToAngle(const Point& point, double percent, const Shape& shape, double validAngle) {
-    double* angles = getMinMaxAngles(point, shape, validAngle);
-    return angles[0] + (angles[1] - angles[0]) * (percent + 1) / 2;
+double getBisectorAngle(Point point, const Shape& shape) {
+    double* tVals = getTangentPoints(point, shape);
+	double angle1 = getAngleToPoint(point, shape, tVals[0]);
+    double angle2 = getAngleToPoint(point, shape, tVals[1]);
+	delete[] tVals;
+	return normalizeAngle((angle1 + angle2) / 2);
+
 }
 
-double angleToPercent(const Point& point, double angle, const Shape& shape) {
-    double* angles = getMinMaxAngles(point, shape, angle);
-    return 2 * (angle - angles[0]) / (angles[1] - angles[0]) - 1;
+
+
+double distanceFromLine(const Point& rayOrigin, double angle, const Point& point) {
+    // Make sure the angle is not along axes for math to work
+    double ang = normalizeAngle(angle);
+    if (ang == 0 || ang == M_PI / 2 || ang == M_PI || ang == 3 * M_PI / 2)
+        ang += dx;
+    // Get the distance from the line defined by rayOrigin and angle to point
+    double slope = tan(ang);
+	double intercept = rayOrigin.y - slope * rayOrigin.x;
+	double perpSlope = -1 / slope;
+	double perpIntercept = point.y - perpSlope * point.x;
+	double x = (intercept - perpIntercept) / (perpSlope - slope);
+	double y = slope * x + intercept;
+	return point.L1Dist(Point(x, y));
 }
 
-bool rayIntersects(const Point& point, double angle, const Shape& shape) {
-    Point curPoint = point;
-    Point unit = Point::unit(angle);
-    double lastVal = INFINITY;
-    for (int i = 0; i < MAX_ITER; ++i) {
-        double dist = shape.distance(curPoint);
-        if (dist <= 0)
-            return true;
-        if (dist > lastVal)
-            return false;
-        lastVal = dist;
-        if (dist > large_step_dist)
-            curPoint = curPoint + unit * large_step;
+
+double distanceFromLineDeriv(const Point& rayOrigin, double angle, const Shape& shape, const double t) {
+    double t2 = shape.addT(t,dx);
+    double t1 = shape.addT(t,-dx);
+    double d1 = distanceFromLine(rayOrigin, angle, shape.equation(t1));
+    double d2 = distanceFromLine(rayOrigin, angle, shape.equation(t2));
+    return (d2 - d1) / (2*dx);
+}
+
+bool angleTooHigh(const Point& rayOrigin, double angle, const Shape& shape, double t) {
+	double angToPoint = getAngleToPoint(rayOrigin, shape, t);
+	return normalizeAngle(angToPoint - angle) > 0;
+}
+
+
+double newtonsMethodCollisionPoint(const Point& point, double angle, const Shape& shape, const double startingT) {
+    double t = startingT;
+    for (int i = 0; i < NUM_ITER; ++i) {
+        double dist = distanceFromLine(point, angle, shape.equation(t));
+        double deriv = distanceFromLineDeriv(point, angle, shape, t);
+        t = shape.addT(t, -grad_descent_rate * dist / deriv);
+    }
+    return t;
+}
+
+// Takes a point, shape, and angle
+// Returns the t value of the collision point on the shape.
+// Undefined behavior if the ray does not collide with the shape, but it will give some t value anyway.
+double getCollisionPoint(const Point& point, double angle, const Shape& shape) {
+    double* tangentVals = getTangentPoints(point, shape);
+    // There will be two points that this ray collides with
+    // We need to find both and return the one that is closest to the point
+    double tooLow, tooHigh;
+    if (angleTooHigh(point, angle, shape, tangentVals[0])) {
+        tooLow = tangentVals[1];
+        tooHigh = tangentVals[0];
+	}
+    else {
+        tooLow = tangentVals[0];
+        tooHigh = tangentVals[1];
+	}
+    delete[] tangentVals;
+    double tl = tooLow;
+    double th = tooHigh;
+
+    for (int i = 0; i < NUM_ITER; ++i) {
+		double mid = shape.middleT(tl, th);
+		if (angleTooHigh(point, angle, shape, mid))
+            th = mid;
+		else
+            tl = mid;
+	}
+        
+    double mid1 = shape.middleT(tl, th);
+
+    tl = tooLow;
+    th = tooHigh;
+
+    for (int i = 0; i < NUM_ITER; ++i) {
+        double mid = shape.middleT(th, tl);
+        if (angleTooHigh(point, angle, shape, mid))
+            th = mid;
         else
-            curPoint = curPoint + unit * step;
+            tl = mid;
     }
-    return false;
+    double mid2 = shape.middleT(th, tl);
+
+    // Check if the dist to mid1 or mid2 is greater
+    double dist1 = shape.equation(mid1).L1Dist(point);
+    double dist2 = shape.equation(mid2).L1Dist(point);
+    if (dist1 < dist2)
+		return mid1;
+    return mid2;
 }
 
-double getTangent(const Point& point, const Shape& shape) {
-    double dist = shape.distance(point);
-    double minAngle = 0;
-    double minDeriv = shape.distance(point + Point(std::cos(minAngle), std::sin(minAngle)) * dx) / dx - dist / dx;
-
-    double maxAngle = M_PI;
-    double maxDeriv = shape.distance(point + Point(std::cos(maxAngle), std::sin(maxAngle)) * dx) / dx - dist / dx;
-
-    for (int i = 0; i < NUM_ITER; ++i) {
-        double midAngle = (minAngle + maxAngle) / 2;
-        double midDeriv = shape.distance(point + Point(std::cos(midAngle), std::sin(midAngle)) * dx) / dx - dist / dx;
-        if ((midDeriv > 0 && maxDeriv > minDeriv) || (midDeriv < 0 && maxDeriv < minDeriv)) {
-            maxAngle = midAngle;
-            maxDeriv = midDeriv;
-        }
-        else {
-            minAngle = midAngle;
-            minDeriv = midDeriv;
-        }
-    }
-
-    return (minAngle + maxAngle) / 2;
-}
-
-Point getCollisionPoint(const Point& p1, const Point& p2, const Shape& shape) {
-    double minDist = shape.distance(p1);
-    Point minPoint = p1;
-    double maxDist = shape.distance(p2);
-    Point maxPoint = p2;
-
-    for (int i = 0; i < NUM_ITER; ++i) {
-        Point midPoint = (minPoint + maxPoint) * 0.5;
-        double midDist = shape.distance(midPoint);
-
-        if ((midDist > 0 && maxDist > minDist) || (midDist < 0 && maxDist < minDist)) {
-            maxPoint = midPoint;
-            maxDist = midDist;
-        }
-        else {
-            minPoint = midPoint;
-            minDist = midDist;
-        }
-    }
-
-    return (minPoint + maxPoint) * 0.5;
-}
-
+// Transformation function, applying one iteration of the collision
 void collideWithShape(const Point& point, double angle, const Shape& shape, Point& outMidpoint, Point& outFinalPoint, double& outNewAngle) {
-    Point unit(std::cos(angle), std::sin(angle));
-    Point curPoint = point;
-    for (int i = 0; i < MAX_ITER; ++i) {
-        double dist = shape.distance(curPoint);
-        if (dist < 0) {
-            outMidpoint = getCollisionPoint(curPoint - unit * step, curPoint, shape);
-            break;
-        }
-        curPoint = curPoint + unit * step;
+    double t = getCollisionPoint(point, angle, shape);
+    if (isnan(t)) {
+        outMidpoint = point;
+        outFinalPoint = point;
+        outNewAngle = angle;
+        return;
     }
-    double tangentAngle = getTangent(outMidpoint, shape);
-    outNewAngle = 2 * tangentAngle - angle;
-    double dist = std::sqrt(std::pow(point.x - outMidpoint.x, 2) + std::pow(point.y - outMidpoint.y, 2));
-    outFinalPoint = outMidpoint + Point(std::cos(outNewAngle), std::sin(outNewAngle)) * dist;
-    // Flip new angle to use as valid angle on next iteration
-    outNewAngle += M_PI;
+    Point collisionPoint = shape.equation(t);
+    Point tanVec = shape.tangent(t);
+    // Reflect the angle about the tangent
+    double newAngle = 2 * atan2(tanVec.y, tanVec.x) - angle;
+    outMidpoint = collisionPoint;
+    outFinalPoint = collisionPoint + Point(cos(newAngle), sin(newAngle)) * collisionPoint.dist(point);
+    outNewAngle = newAngle + M_PI;
 }
 
 void runIterations(const Point& startPoint, double startAngle, int n, const Shape& shape, std::vector<Point>& points) {
@@ -298,18 +442,13 @@ void runIterations(const Point& startPoint, double startAngle, int n, const Shap
         collideWithShape(curPoint, curAngle, shape, nextMidpoint, nextFinalPoint, nextAngle);
         points.push_back(nextMidpoint);
         points.push_back(nextFinalPoint);
+
         if (i < n - 1) {
             curPoint = nextFinalPoint;
-            double curPercent = angleToPercent(curPoint, nextAngle, shape);
-            curAngle = percentToAngle(curPoint, -curPercent, shape, nextAngle);
+            // Reflect the out angle about the bisector angle
+            curAngle = 2 * getBisectorAngle(nextFinalPoint, shape) - nextAngle;
         }
     }
-}
-
-void runFromPercent(const Point& startPoint, double percent, const Point& validPoint, int n, const Shape& shape, std::vector<Point>& points) {
-    double validAngle = std::atan2(validPoint.y - startPoint.y, validPoint.x - startPoint.x);
-    double angle = percentToAngle(startPoint, percent, shape, validAngle);
-    runIterations(startPoint, angle, n, shape, points);
 }
 
 
@@ -336,44 +475,43 @@ void drawLine(sf::RenderWindow& window, const Point& p1, const Point& p2, double
 // HSL to RGB conversion
 // https://en.wikipedia.org/wiki/HSL_and_HSV#From_HSL
 void HSLtoRGB(double h, double s, double l, double& r, double& g, double& b) {
-	double c = (1 - std::fabs(2 * l - 1)) * s;
-	double x = c * (1 - std::fabs(fmod(h / 60, 2) - 1));
-	double m = l - c / 2;
+    double c = (1 - std::fabs(2 * l - 1)) * s;
+    double x = c * (1 - std::fabs(fmod(h / 60, 2) - 1));
+    double m = l - c / 2;
     if (h < 60) {
-		r = c;
-		g = x;
-		b = 0;
-	}
+        r = c;
+        g = x;
+        b = 0;
+    }
     else if (h < 120) {
-		r = x;
-		g = c;
-		b = 0;
-	}
+        r = x;
+        g = c;
+        b = 0;
+    }
     else if (h < 180) {
-		r = 0;
-		g = c;
-		b = x;
-	}
+        r = 0;
+        g = c;
+        b = x;
+    }
     else if (h < 240) {
-		r = 0;
-		g = x;
-		b = c;
-	}
+        r = 0;
+        g = x;
+        b = c;
+    }
     else if (h < 300) {
-		r = x;
-		g = 0;
-		b = c;
-	}
+        r = x;
+        g = 0;
+        b = c;
+    }
     else {
-		r = c;
-		g = 0;
-		b = x;
-	}
-	r += m;
-	g += m;
-	b += m;
+        r = c;
+        g = 0;
+        b = x;
+    }
+    r += m;
+    g += m;
+    b += m;
 }
-
 
 int main() {
 
@@ -390,36 +528,28 @@ int main() {
     double startAngle = atan2(-startPoint.y, -startPoint.x);
     */
 
-    // Very cool shape
-    NEllipse shape({ Point(-1, 1), Point(1, 1), Point(-1, -1), Point(1, -1) }, 4.001 + sqrt(2) * 2);
-    Point startPoint(-2, 2);
-    double startAngle = .9;
+ 
 
+    Ellipse shape(1.3, .6);
+    // Circle shape(1.2);
 
-    /*Rectangle shape(Point(-1, 0), Point(1, -1));
-    double t = 1;
-    
-    Point startPoint = Point::unit(t);
-    double startAngle = 3*M_PI/2;*/
-    bool startAngleIsPercent = true; // If true, startAngle is a number where -1 is furthest left, 1 is furthest right
-                                      //, else it's an angle
-    // If startAngleIsPercent, you need a valid point to calculate the angle from
-    // This point should either be in/on the shape or at least the ray from the startPoint to it should intersect the shape
-    Point validPoint = Point(0, 0);
+    Point startPoint = Point(-1, 2);
 
-    
+    double startAngle = -1.72;
+
+    //Segment shape(1);
+    //Point startPoint = Point(-sqrt(2)/2, sqrt(2)/2);
+    //// Angle from start point to the origin
+    //double startAngle = atan2(-startPoint.y, -startPoint.x);
 
 
     // Create the calculation thread
     std::vector<Point> points;
     std::thread calculationThread;
     calculationThread = std::thread([&] {
-		if (startAngleIsPercent)
-			runFromPercent(startPoint, startAngle, validPoint, 100000, shape, points);
-		else
-			runIterations(startPoint, startAngle, 100000, shape, points);
-	});
-    
+        runIterations(startPoint, startAngle, 100000, shape, points);
+    });
+
 
 
 
@@ -429,14 +559,13 @@ int main() {
     int numDrawn = 1;
 
     // Pixel array for the shape
-    sf::Texture texture;
-    texture.create(w, h);
+    sf::VertexArray curve;
     bool recalculatePixels = true;
     // Main loop
     while (window.isOpen()) {
         // Event handling
         sf::Event event;
-        if(window.pollEvent(event)) {
+        if (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed) {
                 // Kill the calculation thread
                 killThread = true;
@@ -454,34 +583,21 @@ int main() {
         window.clear(sf::Color::Black);
 
 
-        // Draw the sample shape by coloring each pixel based on how close the distance function is to 0
+        // Draw the sample shape
         if (recalculatePixels) {
             recalculatePixels = false;
-            static sf::Uint8* pixels = new sf::Uint8[w * h * 4];
-            for (int x = 0; x < w; ++x) {
-                for (int y = 0; y < h; ++y) {
-                    double dist = shape.distance(Point((x - w / 2) / scalingFactor, (h / 2 - y) / scalingFactor));
-                    if (std::fabs(dist) < maxDist) {
-                        double brightness = 1 - (std::fabs(dist) / maxDist);
-                        pixels[(x + y * w) * 4] = brightness * 255;
-                        pixels[(x + y * w) * 4 + 1] = brightness * 255;
-                        pixels[(x + y * w) * 4 + 2] = brightness * 255;
-                        pixels[(x + y * w) * 4 + 3] = 255;
-                    }
-                    else {
-                        pixels[(x + y * w) * 4] = 0;
-                        pixels[(x + y * w) * 4 + 1] = 0;
-                        pixels[(x + y * w) * 4 + 2] = 0;
-                        pixels[(x + y * w) * 4 + 3] = 255;
-                    }
-                }
-            }
-            texture.update(pixels);
+            // Clear the curve
+            curve.clear();
+            curve.setPrimitiveType(sf::LineStrip);
+            curve.resize(numPointsOfShape + 1);
+            for (int i = 0; i < numPointsOfShape; ++i) {
+				double t = shape.minT + (shape.maxT - shape.minT) * i / numPointsOfShape;
+				Point point = shape.equation(t);
+                curve[i].position = sf::Vector2f(point.x * scalingFactor + window.getSize().x * 0.5, -point.y * scalingFactor + 0.5 * window.getSize().y);
+			}
+            curve[numPointsOfShape].position = curve[0].position;
         }
-        
-        
-        sf::Sprite sprite(texture);
-        window.draw(sprite);
+        window.draw(curve);
 
 
         // Check if points has more points than numDrawn
@@ -500,7 +616,7 @@ int main() {
             // Window only displays if more points are drawn
             window.display();
         }
-        
+
         // Sleep for draw_delay
         std::this_thread::sleep_for(std::chrono::milliseconds((int)(draw_delay * 1000)));
     }
